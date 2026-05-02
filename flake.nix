@@ -1,24 +1,68 @@
 {
-  inputs = {
-    nixpkgs.url = "github:nixos/nixpkgs/nixpkgs-unstable";
-    flake-parts.url = "github:hercules-ci/flake-parts";
-    flake-parts.inputs.nixpkgs-lib.follows = "nixpkgs";
-    systems.url = "github:nix-systems/default";
-    rust-flake.url = "github:juspay/rust-flake";
-    rust-flake.inputs.nixpkgs.follows = "nixpkgs";
+  description = "A flake using Oxalica's rust-overlay wrapped with bevy-flake.";
 
-    git-hooks.url = "github:cachix/git-hooks.nix";
-    git-hooks.flake = false;
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    bevy-flake = {
+      url = "github:swagtop/bevy-flake";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+    rust-overlay = {
+      url = "github:oxalica/rust-overlay";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
-  outputs = inputs:
-    inputs.flake-parts.lib.mkFlake { inherit inputs; } {
-      systems = import inputs.systems;
+  outputs =
+    { nixpkgs
+    , bevy-flake
+    , rust-overlay
+    , ...
+    }:
+    let
+      bf = bevy-flake.configure (
+        { pkgs, ... }:
+        {
+          src = ./src;
+          rustToolchain =
+            targets:
+            let
+              pkgs-with-overlay = (
+                import nixpkgs {
+                  inherit (pkgs.stdenv.hostPlatform) system;
+                  overlays = [ (import rust-overlay) ];
+                }
+              );
+              channel = "stable"; # For nightly, use "nightly".
+            in
+            pkgs-with-overlay.rust-bin.${channel}.latest.default.override {
+              inherit targets;
+              extensions = [
+                "rust-src"
+                "rust-analyzer"
+              ];
+            };
+        }
+      );
+    in
+    {
+      inherit (bf) packages formatter;
 
-      # See ./nix/modules/*.nix for the modules that are imported here.
-      imports = with builtins;
-        map
-          (fn: ./nix/modules/${fn})
-          (attrNames (readDir ./nix/modules));
+      devShells = bf.forSystems (
+        system:
+        let
+          pkgs = import nixpkgs { inherit system; };
+        in
+        {
+          default = pkgs.mkShell {
+            name = "bevy-flake-rust-overlay";
+            packages = [
+              bf.packages.${system}.rust-toolchain
+              bf.packages.${system}.dioxus-cli
+              # bf.packages.${system}.bevy-cli
+            ];
+          };
+        }
+      );
     };
 }
