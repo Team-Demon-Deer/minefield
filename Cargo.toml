@@ -10,3 +10,5 @@ default = []
 #engine
 bevy = "0.18.1"
 bevy_ecs_tilemap = "0.18.1"
+rand = "0.10.1"
+rand_chacha = "0.10.0"
