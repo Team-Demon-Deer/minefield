@@ -15,12 +15,12 @@ use std::{
 use time::UtcDateTime;
 
 /// Game Cursor movement speed factor.
-const GAMECURSOR_SPEED: f32 = 100.;
+const GAMECURSOR_SPEED: f32 = 1.0;
 
 /// How quickly should the camera snap to the desired location.
-const CAMERA_DECAY_RATE: f32 = 2.;
-const CAMERA_ZOOM_SPEED: f32 = 0.5;
-const CAMERA_ZOOM_RANGE: Range<f32> = 0.1..10.0;
+const CAMERA_DECAY_RATE: f32 = 2.0;
+const CAMERA_ZOOM_SPEED: f32 = 0.1;
+const CAMERA_ZOOM_RANGE: Range<f32> = 0.0001..1.0;
 const CELL_SIZE: usize = 16;
 
 const RANDOM_SEED: u64 = 34;
@@ -82,7 +82,7 @@ fn setup(mut commands: Commands, assets: Res<AssetServer>) {
 
     let minefield_tilemap_chunk: TilemapChunk = TilemapChunk {
         chunk_size: UVec2::splat(16),
-        tile_display_size: UVec2::splat(16),
+        tile_display_size: UVec2::splat(1),
         tileset: assets.load_with_settings(
             "minefield-tiles.png",
             |settings: &mut ImageLoaderSettings| {
@@ -110,8 +110,11 @@ fn setup(mut commands: Commands, assets: Res<AssetServer>) {
         initial_bomb_locations[i - 1][i - 1] = true;
     }
 
+    let logical_scale: f32 = 1. / (CELL_SIZE as f32);
+
     commands.spawn((
         Transform {
+            scale: { Vec3::new(logical_scale, logical_scale, logical_scale) },
             ..Default::default()
         },
         Cell {
@@ -125,10 +128,11 @@ fn setup(mut commands: Commands, assets: Res<AssetServer>) {
 
     commands.spawn((
         Transform {
+            scale: { Vec3::new(logical_scale, logical_scale, logical_scale) },
             ..Default::default()
         },
         Cell {
-            logical_position: LogicalPosition { x: 100, y: 0 },
+            logical_position: LogicalPosition { x: 1, y: 0 },
             state: CellState::Fresh,
             bomb_locations: initial_bomb_locations,
         },
@@ -167,15 +171,18 @@ fn spawn_gamecursor(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
-    chunk: Single<&TilemapChunk>,
 ) {
-    let mut transform = chunk.calculate_tile_transform(UVec2::new(0, 0));
-    transform.translation.z = 1.;
-
     commands.spawn((
-        Mesh2d(meshes.add(Rectangle::new(8., 8.))),
+        Mesh2d(meshes.add(Rectangle::new(0.8, 0.8))),
         MeshMaterial2d(materials.add(Color::from(RED_400))),
-        transform,
+        Transform {
+            translation: Vec3 {
+                x: 0.,
+                y: 0.,
+                z: 1.,
+            },
+            ..default()
+        },
         GameCursor {
             logical_position: LogicalPosition { x: 0, y: 0 },
             float_position: Vec2 { x: 0., y: 0. },
