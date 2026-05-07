@@ -4,6 +4,7 @@ use bevy::{
     input::mouse::AccumulatedMouseScroll,
     math::bounding::Aabb2d,
     prelude::*,
+    render::experimental::occlusion_culling::OcclusionCullingSubviewEntities,
     sprite_render::{TileData, TilemapChunk, TilemapChunkTileData},
 };
 use rand::{RngExt, SeedableRng};
@@ -40,8 +41,8 @@ struct LogicalPosition {
 
 #[derive(Debug)]
 struct TilePosition {
-    x: f32,
-    y: f32,
+    x: u8,
+    y: u8,
 }
 
 enum CellState {
@@ -139,7 +140,7 @@ fn setup(mut commands: Commands, assets: Res<AssetServer>) {
             ..Default::default()
         },
         Cell {
-            logical_position: LogicalPosition { x: 1, y: 0 },
+            logical_position: LogicalPosition { x: 2, y: 0 },
             state: CellState::Fresh,
             bomb_locations: initial_bomb_locations,
         },
@@ -225,11 +226,6 @@ fn spawn_gamecursor(
     ));
 }
 
-const CURSOR_FRAC_WRAP_LIMIT: Rect = Rect {
-    min: Vec2 { x: -0.5, y: -0.5 },
-    max: Vec2 { x: 0.5, y: 0.5 },
-};
-
 fn move_gamecursor(
     mut game_cursor: Single<&mut GameCursor>,
     time: Res<Time>,
@@ -265,22 +261,12 @@ fn move_gamecursor(
 
     game_cursor.frac_position = game_cursor.frac_position.fract();
 
-    if game_cursor.frac_position.x > CURSOR_FRAC_WRAP_LIMIT.max.x {
-        game_cursor.frac_position.x -= 1.0;
-    } else if game_cursor.frac_position.x < CURSOR_FRAC_WRAP_LIMIT.min.x {
-        game_cursor.frac_position.x += 1.0;
-    }
+    game_cursor.frac_position = GameCursor::cursor_frac_wrap(game_cursor.frac_position);
 
-    if game_cursor.frac_position.y > CURSOR_FRAC_WRAP_LIMIT.max.y {
-        game_cursor.frac_position.y -= 1.0;
-    } else if game_cursor.frac_position.y < CURSOR_FRAC_WRAP_LIMIT.min.y {
-        game_cursor.frac_position.y += 1.0;
-    }
-
-    println!(
-        "Game_Cursor: {:?}, {:?}",
-        game_cursor.logical_position, game_cursor.frac_position
-    );
+    // println!(
+    //     "Game_Cursor: {:?}, {:?}",
+    //     game_cursor.logical_position, game_cursor.frac_position
+    // );
 }
 
 fn zoom_camera(
@@ -303,21 +289,13 @@ fn zoom_camera(
     }
 }
 
-const CENTER_TO_CORNER_OFFSET: Vec2 = Vec2::new(0.0, 0.0);
-
 fn move_cells(
     q_cells: Query<(&mut Transform, &Cell), With<Cell>>,
     game_cursor: Single<&GameCursor>,
 ) {
     for (mut transform, cell) in q_cells {
-        let game_space_transform: Vec2 = Vec2 {
-            x: (game_cursor.logical_position.x - cell.logical_position.x) as f32
-                + game_cursor.frac_position.x,
-            y: (game_cursor.logical_position.y - cell.logical_position.y) as f32
-                + game_cursor.frac_position.y,
-        };
-        // CENTER_TO_CORNER_OFFSET;
-
+        let game_space_transform: Vec2 =
+            GameCursor::logical_to_world(&game_cursor, cell.logical_position);
         transform.translation.x = -game_space_transform.x;
         transform.translation.y = -game_space_transform.y;
         transform.translation.z = 0.;
@@ -333,27 +311,11 @@ fn on_click(
         if let Ok(world_position) =
             q_camera.viewport_to_world_2d(&GlobalTransform::default(), cursor_position)
         {
-            logical_cursor_with_offset_with_tile(&game_cursor, world_position);
-            println!("world position: {}", world_position);
+            let (temp_log, temp_tile) =
+                GameCursor::world_2d_to_logical(&game_cursor, world_position);
+            println!("Mouse Over: {:?}, Tile: {:?}", temp_log, temp_tile);
         }
     }
-}
-
-fn logical_cursor_with_offset_with_tile(
-    game_cursor: &GameCursor,
-    offset: Vec2,
-) -> (LogicalPosition, TilePosition) {
-    let logical: LogicalPosition = LogicalPosition {
-        x: game_cursor.logical_position.x + (offset.x.round() as i64),
-        y: game_cursor.logical_position.y + (offset.y.round() as i64),
-    };
-    let tile: TilePosition = TilePosition {
-        x: (offset.x.fract() * (CELL_SIZE as f32)).round(),
-        y: (offset.y.fract() * (CELL_SIZE as f32)).round(),
-    };
-
-    println!("cursor offset {:?}, {:?}", logical, tile);
-    return (logical, tile);
 }
 
 impl GameCursor {
@@ -366,15 +328,54 @@ impl GameCursor {
 
     pub fn logical_to_world(game_cursor: &GameCursor, logical_position: LogicalPosition) -> Vec2 {
         return Vec2 {
-            x: (game_cursor.logical_position.x + logical_position.x) as f32,
-            y: (game_cursor.logical_position.y + logical_position.y) as f32,
+            x: (game_cursor.logical_position.x - logical_position.x) as f32
+                + game_cursor.frac_position.x,
+            y: (game_cursor.logical_position.y - logical_position.y) as f32
+                + game_cursor.frac_position.y,
         };
     }
 
-    pub fn complex_add(game_cursor: &GameCursor, delta: Vec2) -> LogicalPosition {
-        return LogicalPosition {
-            x: game_cursor.logical_position.x + (delta.x.round() as i64),
-            y: game_cursor.logical_position.y + (delta.y.round() as i64),
+    pub fn world_2d_to_logical(
+        game_cursor: &GameCursor,
+        world_position_2d: Vec2,
+    ) -> (LogicalPosition, TilePosition) {
+        let mut offset_frac_pos = game_cursor.frac_position + world_position_2d;
+
+        let log_pos: LogicalPosition = LogicalPosition {
+            x: game_cursor.logical_position.x + offset_frac_pos.x.round() as i64,
+            y: game_cursor.logical_position.y + offset_frac_pos.y.round() as i64,
         };
+
+        offset_frac_pos =
+            GameCursor::cursor_frac_wrap(offset_frac_pos.fract()) + Vec2::new(0.5, 0.5);
+        offset_frac_pos = offset_frac_pos * Vec2::splat(CELL_SIZE as f32);
+
+        return (
+            log_pos,
+            TilePosition {
+                x: offset_frac_pos.x.trunc() as u8,
+                y: offset_frac_pos.y.trunc() as u8,
+            },
+        );
+    }
+
+    const CURSOR_FRAC_WRAP_LIMIT: Rect = Rect {
+        min: Vec2 { x: -0.5, y: -0.5 },
+        max: Vec2 { x: 0.5, y: 0.5 },
+    };
+    pub fn cursor_frac_wrap(mut cursor_frac: Vec2) -> Vec2 {
+        if cursor_frac.x > Self::CURSOR_FRAC_WRAP_LIMIT.max.x {
+            cursor_frac.x -= 1.0;
+        } else if cursor_frac.x < Self::CURSOR_FRAC_WRAP_LIMIT.min.x {
+            cursor_frac.x += 1.0;
+        }
+
+        if cursor_frac.y > Self::CURSOR_FRAC_WRAP_LIMIT.max.y {
+            cursor_frac.y -= 1.0;
+        } else if cursor_frac.y < Self::CURSOR_FRAC_WRAP_LIMIT.min.y {
+            cursor_frac.y += 1.0;
+        }
+
+        return cursor_frac;
     }
 }
