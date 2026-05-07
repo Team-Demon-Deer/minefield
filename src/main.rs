@@ -390,10 +390,14 @@ impl Cell {
 impl TilePosition {
     pub fn tile_to_world(game_cursor: &GameCursor, tile_position: TilePosition) -> Vec2 {
         return Vec2 {
-            x: ((game_cursor.logical_position.x - tile_position.cell.x) as f32)
-                + (tile_position.x as f32 * CELL_SCALE),
-            y: ((game_cursor.logical_position.y - tile_position.cell.y) as f32)
-                + (tile_position.y as f32 * CELL_SCALE),
+            x: ((tile_position.cell.x - game_cursor.logical_position.x) as f32)
+                + ((tile_position.x as f32 + 0.5) * CELL_SCALE)
+                - game_cursor.frac_position.x
+                - 0.5,
+            y: ((tile_position.cell.y - game_cursor.logical_position.y) as f32)
+                + ((tile_position.y as f32 + 0.5) * CELL_SCALE)
+                - game_cursor.frac_position.y
+                - 0.5,
         };
     }
 }
@@ -424,13 +428,13 @@ impl GameCursor {
         };
 
         offset_frac_pos =
-            GameCursor::cursor_frac_wrap(offset_frac_pos.fract()) + Vec2::new(0.5, 0.5);
+            GameCursor::cursor_frac_wrap(offset_frac_pos.fract()) + Vec2::new(0.5, 0.5); // 0.5, 0.5 vec added to avoid the -0 condition
         offset_frac_pos = offset_frac_pos * Vec2::splat(CELL_SIZE as f32);
 
         return TilePosition {
             cell: log_pos,
-            x: offset_frac_pos.x.round_ties_even() as u8,
-            y: offset_frac_pos.y.round_ties_even() as u8,
+            x: offset_frac_pos.x.trunc() as u8,
+            y: offset_frac_pos.y.trunc() as u8,
         };
     }
 
