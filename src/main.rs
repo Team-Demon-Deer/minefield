@@ -21,7 +21,7 @@ const GAMECURSOR_SPEED: f32 = 1.0;
 const CAMERA_DECAY_RATE: f32 = 2.0;
 const CAMERA_ZOOM_SPEED: f32 = 0.1;
 const CAMERA_ZOOM_RANGE: Range<f32> = 0.0001..1.0;
-const CELL_SIZE: usize = 16;
+const CELL_SIZE: u8 = 16;
 
 const RANDOM_SEED: u64 = 34;
 
@@ -32,10 +32,16 @@ struct Cell {
     bomb_locations: TilesArray,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 struct LogicalPosition {
     x: i64,
     y: i64,
+}
+
+#[derive(Debug)]
+struct TilePosition {
+    x: f32,
+    y: f32,
 }
 
 enum CellState {
@@ -51,7 +57,7 @@ enum CellState {
     Solved,
 }
 
-type TilesArray = [[bool; CELL_SIZE]; CELL_SIZE];
+type TilesArray = [[bool; CELL_SIZE as usize]; CELL_SIZE as usize];
 
 fn main() {
     App::new()
@@ -69,6 +75,7 @@ fn main() {
             )
                 .chain(),
         )
+        .add_systems(Update, (on_click).chain())
         .run();
 }
 
@@ -105,8 +112,8 @@ fn setup(mut commands: Commands, assets: Res<AssetServer>) {
             }
         })
         .collect();
-    let mut initial_bomb_locations: TilesArray = [[false; CELL_SIZE]; CELL_SIZE];
-    for i in 1..CELL_SIZE {
+    let mut initial_bomb_locations: TilesArray = default();
+    for i in 1..(CELL_SIZE as usize) {
         initial_bomb_locations[i - 1][i - 1] = true;
     }
 
@@ -140,6 +147,34 @@ fn setup(mut commands: Commands, assets: Res<AssetServer>) {
         TilemapChunkTileData(tile_data.clone()),
     ));
 
+    commands.spawn((
+        Transform {
+            scale: { Vec3::new(logical_scale, logical_scale, logical_scale) },
+            ..Default::default()
+        },
+        Cell {
+            logical_position: LogicalPosition { x: 2, y: 2 },
+            state: CellState::Fresh,
+            bomb_locations: initial_bomb_locations,
+        },
+        minefield_tilemap_chunk.clone(),
+        TilemapChunkTileData(tile_data.clone()),
+    ));
+
+    commands.spawn((
+        Transform {
+            scale: { Vec3::new(logical_scale, logical_scale, logical_scale) },
+            ..Default::default()
+        },
+        Cell {
+            logical_position: LogicalPosition { x: -1, y: -1 },
+            state: CellState::Fresh,
+            bomb_locations: initial_bomb_locations,
+        },
+        minefield_tilemap_chunk.clone(),
+        TilemapChunkTileData(tile_data.clone()),
+    ));
+
     commands.spawn(Camera2d);
 
     commands.insert_resource(SeededRng(rng));
@@ -164,7 +199,7 @@ fn update_camera(
 #[derive(Component, Debug)]
 struct GameCursor {
     logical_position: LogicalPosition,
-    float_position: Vec2,
+    frac_position: Vec2,
 }
 
 fn spawn_gamecursor(
@@ -173,7 +208,7 @@ fn spawn_gamecursor(
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
     commands.spawn((
-        Mesh2d(meshes.add(Rectangle::new(0.8, 0.8))),
+        Mesh2d(meshes.add(Rectangle::new(0.2, 0.2))),
         MeshMaterial2d(materials.add(Color::from(RED_400))),
         Transform {
             translation: Vec3 {
@@ -185,10 +220,15 @@ fn spawn_gamecursor(
         },
         GameCursor {
             logical_position: LogicalPosition { x: 0, y: 0 },
-            float_position: Vec2 { x: 0., y: 0. },
+            frac_position: Vec2 { x: 0., y: 0. },
         },
     ));
 }
+
+const CURSOR_FRAC_WRAP_LIMIT: Rect = Rect {
+    min: Vec2 { x: -0.5, y: -0.5 },
+    max: Vec2 { x: 0.5, y: 0.5 },
+};
 
 fn move_gamecursor(
     mut game_cursor: Single<&mut GameCursor>,
@@ -198,19 +238,19 @@ fn move_gamecursor(
     let mut direction = Vec2::ZERO;
 
     if kb_input.pressed(KeyCode::KeyW) {
-        direction.y -= 1.;
-    }
-
-    if kb_input.pressed(KeyCode::KeyS) {
         direction.y += 1.;
     }
 
+    if kb_input.pressed(KeyCode::KeyS) {
+        direction.y -= 1.;
+    }
+
     if kb_input.pressed(KeyCode::KeyA) {
-        direction.x += 1.;
+        direction.x -= 1.;
     }
 
     if kb_input.pressed(KeyCode::KeyD) {
-        direction.x -= 1.;
+        direction.x += 1.;
     }
 
     // Progressively update the player's position over time. Normalize the
@@ -218,17 +258,29 @@ fn move_gamecursor(
     // moving diagonally.
     let move_delta = direction.normalize_or_zero() * GAMECURSOR_SPEED * time.delta_secs();
 
-    game_cursor.logical_position.x = game_cursor.logical_position.x
-        + (move_delta.x.trunc() as i64)
-        + (game_cursor.float_position.x.trunc() as i64);
-    game_cursor.logical_position.y = game_cursor.logical_position.y
-        + (move_delta.y.trunc() as i64)
-        + (game_cursor.float_position.y.trunc() as i64);
+    game_cursor.frac_position += move_delta;
 
-    game_cursor.float_position.x = game_cursor.float_position.x.fract() + move_delta.x.fract();
-    game_cursor.float_position.y = game_cursor.float_position.y.fract() + move_delta.y.fract();
+    game_cursor.logical_position.x += game_cursor.frac_position.x.round() as i64;
+    game_cursor.logical_position.y += game_cursor.frac_position.y.round() as i64;
 
-    // game_cursor.translation += move_delta.extend(0.);
+    game_cursor.frac_position = game_cursor.frac_position.fract();
+
+    if game_cursor.frac_position.x > CURSOR_FRAC_WRAP_LIMIT.max.x {
+        game_cursor.frac_position.x -= 1.0;
+    } else if game_cursor.frac_position.x < CURSOR_FRAC_WRAP_LIMIT.min.x {
+        game_cursor.frac_position.x += 1.0;
+    }
+
+    if game_cursor.frac_position.y > CURSOR_FRAC_WRAP_LIMIT.max.y {
+        game_cursor.frac_position.y -= 1.0;
+    } else if game_cursor.frac_position.y < CURSOR_FRAC_WRAP_LIMIT.min.y {
+        game_cursor.frac_position.y += 1.0;
+    }
+
+    println!(
+        "Game_Cursor: {:?}, {:?}",
+        game_cursor.logical_position, game_cursor.frac_position
+    );
 }
 
 fn zoom_camera(
@@ -251,21 +303,7 @@ fn zoom_camera(
     }
 }
 
-// fn spawn_cells(
-//     mut commands: Commands,
-//     game_cursor: Single<&GameCursor>,
-//     transform: Query<&Transform, With<Camera>>,
-//     windows: Query<&Window>,
-//     random: Res<SeededRng>,
-// ) {
-//     let Ok(window) = windows.single() else {
-//         return;
-//     };
-
-//     let window_size = window.size();
-
-//     // TODO: Actually Spawn Cells
-// }
+const CENTER_TO_CORNER_OFFSET: Vec2 = Vec2::new(0.0, 0.0);
 
 fn move_cells(
     q_cells: Query<(&mut Transform, &Cell), With<Cell>>,
@@ -273,16 +311,70 @@ fn move_cells(
 ) {
     for (mut transform, cell) in q_cells {
         let game_space_transform: Vec2 = Vec2 {
-            x: ((game_cursor.logical_position.x - cell.logical_position.x) as f32)
-                + game_cursor.float_position.x,
-            y: ((game_cursor.logical_position.y - cell.logical_position.y) as f32)
-                + game_cursor.float_position.y,
+            x: (game_cursor.logical_position.x - cell.logical_position.x) as f32
+                + game_cursor.frac_position.x,
+            y: (game_cursor.logical_position.y - cell.logical_position.y) as f32
+                + game_cursor.frac_position.y,
         };
+        // CENTER_TO_CORNER_OFFSET;
 
-        transform.translation.x = game_space_transform.x;
-        transform.translation.y = game_space_transform.y;
+        transform.translation.x = -game_space_transform.x;
+        transform.translation.y = -game_space_transform.y;
         transform.translation.z = 0.;
+    }
+}
 
-        println!("{}, {:?}", transform.translation, cell.logical_position);
+fn on_click(
+    game_cursor: Single<&GameCursor>,
+    q_window: Single<&Window>,
+    q_camera: Single<&Camera>,
+) {
+    if let Some(cursor_position) = q_window.cursor_position() {
+        if let Ok(world_position) =
+            q_camera.viewport_to_world_2d(&GlobalTransform::default(), cursor_position)
+        {
+            logical_cursor_with_offset_with_tile(&game_cursor, world_position);
+            println!("world position: {}", world_position);
+        }
+    }
+}
+
+fn logical_cursor_with_offset_with_tile(
+    game_cursor: &GameCursor,
+    offset: Vec2,
+) -> (LogicalPosition, TilePosition) {
+    let logical: LogicalPosition = LogicalPosition {
+        x: game_cursor.logical_position.x + (offset.x.round() as i64),
+        y: game_cursor.logical_position.y + (offset.y.round() as i64),
+    };
+    let tile: TilePosition = TilePosition {
+        x: (offset.x.fract() * (CELL_SIZE as f32)).round(),
+        y: (offset.y.fract() * (CELL_SIZE as f32)).round(),
+    };
+
+    println!("cursor offset {:?}, {:?}", logical, tile);
+    return (logical, tile);
+}
+
+impl GameCursor {
+    fn new(logical_position: LogicalPosition, frac_position: Vec2) -> Self {
+        GameCursor {
+            logical_position: logical_position,
+            frac_position: frac_position,
+        }
+    }
+
+    pub fn logical_to_world(game_cursor: &GameCursor, logical_position: LogicalPosition) -> Vec2 {
+        return Vec2 {
+            x: (game_cursor.logical_position.x + logical_position.x) as f32,
+            y: (game_cursor.logical_position.y + logical_position.y) as f32,
+        };
+    }
+
+    pub fn complex_add(game_cursor: &GameCursor, delta: Vec2) -> LogicalPosition {
+        return LogicalPosition {
+            x: game_cursor.logical_position.x + (delta.x.round() as i64),
+            y: game_cursor.logical_position.y + (delta.y.round() as i64),
+        };
     }
 }
