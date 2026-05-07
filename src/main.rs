@@ -302,19 +302,24 @@ fn on_click(
     game_cursor: Single<&GameCursor>,
     q_window: Single<&Window>,
     q_camera: Single<&Camera>,
+    mouse_click_input: Res<ButtonInput<MouseButton>>,
 ) {
     if let Some(cursor_position) = q_window.cursor_position() {
         if let Ok(world_position) =
             q_camera.viewport_to_world_2d(&GlobalTransform::default(), cursor_position)
         {
             let tile_location = GameCursor::world_2d_to_logical(&game_cursor, world_position);
-            println!("Mouse Over: {:?}", tile_location);
+            if mouse_click_input.just_pressed(MouseButton::Left) {
+                println!("Reveal: {:?}", tile_location);
+            } else if mouse_click_input.just_pressed(MouseButton::Right) {
+                println!("Flag: {:?}", tile_location);
+            }
         }
     }
 }
 
 impl Cell {
-    pub fn reveal_tile() {
+    pub fn reveal_tile(target_tile: TilePosition) {
         unimplemented!()
     }
     pub fn place_flag() {
