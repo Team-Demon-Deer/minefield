@@ -1,4 +1,6 @@
+use bevy::color::palettes::tailwind::BLUE_400;
 use bevy::prelude::*;
+use bevy::sprite_render::TilemapChunkMeshCache;
 use bevy::{
     color::palettes::tailwind::RED_400,
     image::{ImageArrayLayout, ImageLoaderSettings},
@@ -18,7 +20,7 @@ const CAMERA_DECAY_RATE: f32 = 2.0;
 const CAMERA_ZOOM_SPEED: f32 = 0.1;
 const CAMERA_ZOOM_RANGE: Range<f32> = 0.0001..1.0;
 const CELL_SIZE: u8 = 16;
-
+const CELL_SCALE: f32 = 1. / (CELL_SIZE as f32);
 const RANDOM_SEED: u64 = 34;
 
 #[derive(Component)]
@@ -34,7 +36,7 @@ struct LogicalPosition {
     y: i64,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Component, Clone, Copy)]
 struct TilePosition {
     cell: LogicalPosition,
     x: u8,
@@ -59,14 +61,16 @@ type TilesArray = [[bool; CELL_SIZE as usize]; CELL_SIZE as usize];
 fn main() {
     App::new()
         .add_plugins(DefaultPlugins.set(ImagePlugin::default_nearest()))
-        .add_systems(Startup, (setup, spawn_gamecursor).chain())
+        .add_systems(
+            Startup,
+            (setup, spawn_gamecursor, spawn_tile_cursor).chain(),
+        )
         .add_systems(
             Update,
             (
-                // update_tilemap,
                 move_gamecursor,
+                move_tile_cursor,
                 move_cells,
-                // log_tile,
                 update_camera,
                 zoom_camera,
             )
@@ -85,7 +89,7 @@ fn setup(mut commands: Commands, assets: Res<AssetServer>) {
     let mut rng = ChaCha8Rng::seed_from_u64(RANDOM_SEED);
 
     let minefield_tilemap_chunk: TilemapChunk = TilemapChunk {
-        chunk_size: UVec2::splat(16),
+        chunk_size: UVec2::splat(CELL_SIZE as u32),
         tile_display_size: UVec2::splat(1),
         tileset: assets.load_with_settings(
             "minefield-tiles.png",
@@ -98,8 +102,7 @@ fn setup(mut commands: Commands, assets: Res<AssetServer>) {
         ..default()
     };
 
-    let chunk_size = UVec2::splat(16);
-    let tile_data: Vec<Option<TileData>> = (0..chunk_size.element_product())
+    let tile_data: Vec<Option<TileData>> = (0..UVec2::splat(CELL_SIZE as u32).element_product())
         .map(|_| rng.random_range(0..15))
         .map(|i| {
             if i == 0 {
@@ -118,7 +121,7 @@ fn setup(mut commands: Commands, assets: Res<AssetServer>) {
 
     commands.spawn((
         Transform {
-            scale: { Vec3::new(logical_scale, logical_scale, logical_scale) },
+            scale: { Vec3::splat(CELL_SCALE) },
             ..Default::default()
         },
         Cell {
@@ -228,7 +231,6 @@ fn move_gamecursor(
     kb_input: Res<ButtonInput<KeyCode>>,
 ) {
     let mut direction = Vec2::ZERO;
-
     if kb_input.pressed(KeyCode::KeyW) {
         direction.y += 1.;
     }
@@ -285,6 +287,14 @@ fn zoom_camera(
     }
 }
 
+// fn spawn_visible_cells(
+//     game_cursor: Single<&GameCursor>,
+//     q_window: Single<&Window>,
+//     q_camera: Single<&Camera>,
+//     q_cells: Query<&Cell>,
+// ) {
+// }
+
 fn move_cells(
     q_cells: Query<(&mut Transform, &Cell), With<Cell>>,
     game_cursor: Single<&GameCursor>,
@@ -318,12 +328,73 @@ fn on_click(
     }
 }
 
+fn spawn_tile_cursor(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+) {
+    commands.spawn((
+        Mesh2d(meshes.add(Rectangle::new(CELL_SCALE, CELL_SCALE))),
+        MeshMaterial2d(materials.add(Color::from(BLUE_400))),
+        Transform {
+            translation: Vec3 {
+                x: 0.,
+                y: 0.,
+                z: 1.,
+            },
+            ..default()
+        },
+        TilePosition {
+            cell: LogicalPosition { x: 0, y: 0 },
+            x: 0,
+            y: 0,
+        },
+    ));
+}
+fn move_tile_cursor(
+    game_cursor: Single<&GameCursor>,
+    q_window: Single<&Window>,
+    q_camera: Single<&Camera>,
+    mut tile_pos: Single<&mut TilePosition>,
+    mut tile_transform: Single<&mut Transform, With<TilePosition>>,
+) {
+    if let Some(cursor_position) = q_window.cursor_position() {
+        if let Ok(world_position) =
+            q_camera.viewport_to_world_2d(&GlobalTransform::default(), cursor_position)
+        {
+            let temp_pos: TilePosition =
+                GameCursor::world_2d_to_logical(&game_cursor, world_position);
+            // tile_pos.cell = temp_pos.cell;
+            // tile_pos.x = temp_pos.x;
+            // tile_pos.y = temp_pos.y;
+
+            let game_space_transform: Vec2 = TilePosition::tile_to_world(&game_cursor, temp_pos);
+            println!("cursor tile pos: {:?}", temp_pos);
+            println!("transform: {:?}", game_space_transform);
+            tile_transform.translation.x = game_space_transform.x;
+            tile_transform.translation.y = game_space_transform.y;
+            tile_transform.translation.z = 0.5;
+        }
+    }
+}
+
 impl Cell {
     pub fn reveal_tile(target_tile: TilePosition) {
         unimplemented!()
     }
     pub fn place_flag() {
         unimplemented!()
+    }
+}
+
+impl TilePosition {
+    pub fn tile_to_world(game_cursor: &GameCursor, tile_position: TilePosition) -> Vec2 {
+        return Vec2 {
+            x: ((game_cursor.logical_position.x - tile_position.cell.x) as f32)
+                + (tile_position.x as f32 * CELL_SCALE),
+            y: ((game_cursor.logical_position.y - tile_position.cell.y) as f32)
+                + (tile_position.y as f32 * CELL_SCALE),
+        };
     }
 }
 
@@ -358,8 +429,8 @@ impl GameCursor {
 
         return TilePosition {
             cell: log_pos,
-            x: offset_frac_pos.x.trunc() as u8,
-            y: offset_frac_pos.y.trunc() as u8,
+            x: offset_frac_pos.x.round_ties_even() as u8,
+            y: offset_frac_pos.y.round_ties_even() as u8,
         };
     }
 
