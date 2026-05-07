@@ -1,18 +1,13 @@
+use bevy::prelude::*;
 use bevy::{
     color::palettes::tailwind::RED_400,
     image::{ImageArrayLayout, ImageLoaderSettings},
     input::mouse::AccumulatedMouseScroll,
-    math::bounding::Aabb2d,
-    prelude::*,
-    render::experimental::occlusion_culling::OcclusionCullingSubviewEntities,
     sprite_render::{TileData, TilemapChunk, TilemapChunkTileData},
 };
 use rand::{RngExt, SeedableRng};
 use rand_chacha::ChaCha8Rng;
-use std::{
-    mem::transmute,
-    ops::{Index, Range},
-};
+use std::ops::Range;
 use time::UtcDateTime;
 
 /// Game Cursor movement speed factor.
@@ -41,6 +36,7 @@ struct LogicalPosition {
 
 #[derive(Debug)]
 struct TilePosition {
+    cell: LogicalPosition,
     x: u8,
     y: u8,
 }
@@ -311,10 +307,18 @@ fn on_click(
         if let Ok(world_position) =
             q_camera.viewport_to_world_2d(&GlobalTransform::default(), cursor_position)
         {
-            let (temp_log, temp_tile) =
-                GameCursor::world_2d_to_logical(&game_cursor, world_position);
-            println!("Mouse Over: {:?}, Tile: {:?}", temp_log, temp_tile);
+            let tile_location = GameCursor::world_2d_to_logical(&game_cursor, world_position);
+            println!("Mouse Over: {:?}", tile_location);
         }
+    }
+}
+
+impl Cell {
+    pub fn reveal_tile() {
+        unimplemented!()
+    }
+    pub fn place_flag() {
+        unimplemented!()
     }
 }
 
@@ -335,10 +339,7 @@ impl GameCursor {
         };
     }
 
-    pub fn world_2d_to_logical(
-        game_cursor: &GameCursor,
-        world_position_2d: Vec2,
-    ) -> (LogicalPosition, TilePosition) {
+    pub fn world_2d_to_logical(game_cursor: &GameCursor, world_position_2d: Vec2) -> TilePosition {
         let mut offset_frac_pos = game_cursor.frac_position + world_position_2d;
 
         let log_pos: LogicalPosition = LogicalPosition {
@@ -350,13 +351,11 @@ impl GameCursor {
             GameCursor::cursor_frac_wrap(offset_frac_pos.fract()) + Vec2::new(0.5, 0.5);
         offset_frac_pos = offset_frac_pos * Vec2::splat(CELL_SIZE as f32);
 
-        return (
-            log_pos,
-            TilePosition {
-                x: offset_frac_pos.x.trunc() as u8,
-                y: offset_frac_pos.y.trunc() as u8,
-            },
-        );
+        return TilePosition {
+            cell: log_pos,
+            x: offset_frac_pos.x.trunc() as u8,
+            y: offset_frac_pos.y.trunc() as u8,
+        };
     }
 
     const CURSOR_FRAC_WRAP_LIMIT: Rect = Rect {
