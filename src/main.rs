@@ -365,15 +365,15 @@ impl GameCursor {
     };
     pub fn cursor_frac_wrap(mut cursor_frac: Vec2) -> Vec2 {
         if cursor_frac.x > Self::CURSOR_FRAC_WRAP_LIMIT.max.x {
-            cursor_frac.x -= 1.0;
+            cursor_frac.x -= Self::CURSOR_FRAC_WRAP_LIMIT.width();
         } else if cursor_frac.x < Self::CURSOR_FRAC_WRAP_LIMIT.min.x {
-            cursor_frac.x += 1.0;
+            cursor_frac.x += Self::CURSOR_FRAC_WRAP_LIMIT.width();
         }
 
         if cursor_frac.y > Self::CURSOR_FRAC_WRAP_LIMIT.max.y {
-            cursor_frac.y -= 1.0;
+            cursor_frac.y -= Self::CURSOR_FRAC_WRAP_LIMIT.height();
         } else if cursor_frac.y < Self::CURSOR_FRAC_WRAP_LIMIT.min.y {
-            cursor_frac.y += 1.0;
+            cursor_frac.y += Self::CURSOR_FRAC_WRAP_LIMIT.height();
         }
 
         return cursor_frac;
