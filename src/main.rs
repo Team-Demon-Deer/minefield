@@ -19,16 +19,23 @@ const GAMECURSOR_SPEED: f32 = 1.0;
 
 /// How quickly should the camera snap to the desired location.
 const CAMERA_DECAY_RATE: f32 = 2.0;
-const CAMERA_ZOOM_SPEED: f32 = 0.1;
-const CAMERA_ZOOM_RANGE: Range<f32> = 0.0001..0.010;
+const CAMERA_ZOOM_SPEED: f32 = 0.05;
+const CAMERA_ZOOM_RANGE: Range<f32> = 0.001..0.010;
 const CELL_SIZE: u8 = 16;
 const CELL_SCALE: f32 = 1. / (CELL_SIZE as f32);
 const RANDOM_SEED: u64 = 34;
 
+const CELL_SPAWN_OVERSCAN: i64 = 1;
+const CELL_DESPAWN_OVERSCAN: i64 = 5;
+
 #[derive(Component)]
 struct Cell {
     logical_position: LogicalPosition,
-    state: CellState,
+}
+
+#[derive(Component)]
+struct CellGame {
+    state: GameState,
     bomb_locations: TilesArray,
 }
 
@@ -45,7 +52,7 @@ struct TilePosition {
     y: u8,
 }
 
-enum CellState {
+enum GameState {
     Fresh,
     InProgress {
         revealed_tiles: TilesArray,
@@ -64,6 +71,8 @@ type TilesArray = [[bool; CELL_SIZE as usize]; CELL_SIZE as usize];
 struct MinefieldTilemap(Handle<Image>);
 
 fn main() {
+    startup_assertions();
+
     App::new()
         .add_plugins(DefaultPlugins.set(ImagePlugin::default_nearest()))
         .add_systems(
@@ -137,8 +146,6 @@ fn setup(mut commands: Commands, assets: Res<AssetServer>) {
         },
         Cell {
             logical_position: LogicalPosition { x: 0, y: 0 },
-            state: CellState::Fresh,
-            bomb_locations: initial_bomb_locations,
         },
         minefield_tilemap_chunk.clone(),
         TilemapChunkTileData(tile_data.clone()),
@@ -150,9 +157,9 @@ fn setup(mut commands: Commands, assets: Res<AssetServer>) {
             ..Default::default()
         },
         Cell {
+            // spawn_visible_cells,
+            // remove_nonvisible_cells,
             logical_position: LogicalPosition { x: 2, y: 0 },
-            state: CellState::Fresh,
-            bomb_locations: initial_bomb_locations,
         },
         minefield_tilemap_chunk.clone(),
         TilemapChunkTileData(tile_data.clone()),
@@ -165,8 +172,6 @@ fn setup(mut commands: Commands, assets: Res<AssetServer>) {
         },
         Cell {
             logical_position: LogicalPosition { x: 2, y: 2 },
-            state: CellState::Fresh,
-            bomb_locations: initial_bomb_locations,
         },
         minefield_tilemap_chunk.clone(),
         TilemapChunkTileData(tile_data.clone()),
@@ -179,8 +184,6 @@ fn setup(mut commands: Commands, assets: Res<AssetServer>) {
         },
         Cell {
             logical_position: LogicalPosition { x: -1, y: -1 },
-            state: CellState::Fresh,
-            bomb_locations: initial_bomb_locations,
         },
         minefield_tilemap_chunk.clone(),
         TilemapChunkTileData(tile_data.clone()),
@@ -323,14 +326,18 @@ fn spawn_visible_cells(
 
     match *q_camera.into_inner() {
         Projection::Orthographic(ref orthographic) => {
-            let screen_delta_max_x: i64 =
-                (game_cursor.logical_position.x + orthographic.area.max.x as i64);
-            let screen_delta_min_x: i64 =
-                (game_cursor.logical_position.x + orthographic.area.min.x as i64);
-            let screen_delta_max_y: i64 =
-                (game_cursor.logical_position.y + orthographic.area.max.y as i64);
-            let screen_delta_min_y: i64 =
-                (game_cursor.logical_position.y + orthographic.area.min.y as i64);
+            let screen_delta_max_x: i64 = (game_cursor.logical_position.x
+                + orthographic.area.max.x as i64)
+                + CELL_SPAWN_OVERSCAN;
+            let screen_delta_min_x: i64 = (game_cursor.logical_position.x
+                + orthographic.area.min.x as i64)
+                - CELL_SPAWN_OVERSCAN;
+            let screen_delta_max_y: i64 = (game_cursor.logical_position.y
+                + orthographic.area.max.y as i64)
+                + CELL_SPAWN_OVERSCAN;
+            let screen_delta_min_y: i64 = (game_cursor.logical_position.y
+                + orthographic.area.min.y as i64)
+                - CELL_SPAWN_OVERSCAN;
 
             // println!(
             //     "screensize: {:?}, Delta: L: ({:?}, {:?}) U: ({:?}, {:?})",
@@ -357,32 +364,31 @@ fn spawn_visible_cells(
                         //     LogicalPosition { x: i_x, y: i_y },
                         // );
 
-                        // commands.spawn((
-                        //     Transform {
-                        //         scale: { Vec3::splat(CELL_SCALE) },
-                        //         translation: Vec3 {
-                        //             x: -game_space_transform.x,
-                        //             y: -game_space_transform.y,
-                        //             z: 0.,
-                        //         },
-                        //         ..Default::default()
-                        //     },
-                        //     Cell {
-                        //         logical_position: LogicalPosition {
-                        //             x: i_x as i64,
-                        //             y: i_y as i64,
-                        //         },
-                        //         state: CellState::Fresh,
-                        //         bomb_locations: initial_bomb_locations,
-                        //     },
-                        //     TilemapChunk {
-                        //         chunk_size: UVec2::splat(CELL_SIZE as u32),
-                        //         tile_display_size: UVec2::splat(1),
-                        //         tileset: minefield_tileset.0.clone(),
-                        //         ..default()
-                        //     },
-                        //     TilemapChunkTileData(tile_data.clone()),
-                        // ));
+                        commands.spawn((
+                            Transform {
+                                scale: { Vec3::splat(CELL_SCALE) },
+                                translation: Vec3 {
+                                    x: 2000., //-game_space_transform.x,
+                                    y: 2000., //-game_space_transform.y,
+
+                                    z: 0.,
+                                },
+                                ..Default::default()
+                            },
+                            Cell {
+                                logical_position: LogicalPosition {
+                                    x: i_x as i64,
+                                    y: i_y as i64,
+                                },
+                            },
+                            TilemapChunk {
+                                chunk_size: UVec2::splat(CELL_SIZE as u32),
+                                tile_display_size: UVec2::splat(1),
+                                tileset: minefield_tileset.0.clone(),
+                                ..default()
+                            },
+                            TilemapChunkTileData(tile_data.clone()),
+                        ));
                     }
                 }
             }
@@ -402,14 +408,18 @@ fn remove_nonvisible_cells(
 ) {
     match *q_camera.into_inner() {
         Projection::Orthographic(ref orthographic) => {
-            let screen_delta_max_x: i64 =
-                (game_cursor.logical_position.x + orthographic.area.max.x as i64) + 1;
-            let screen_delta_min_x: i64 =
-                (game_cursor.logical_position.x + orthographic.area.min.x as i64) - 1;
-            let screen_delta_max_y: i64 =
-                (game_cursor.logical_position.y + orthographic.area.max.y as i64) + 1;
-            let screen_delta_min_y: i64 =
-                (game_cursor.logical_position.y + orthographic.area.min.y as i64) - 1;
+            let screen_delta_max_x: i64 = (game_cursor.logical_position.x
+                + orthographic.area.max.x as i64)
+                + CELL_DESPAWN_OVERSCAN;
+            let screen_delta_min_x: i64 = (game_cursor.logical_position.x
+                + orthographic.area.min.x as i64)
+                - CELL_DESPAWN_OVERSCAN;
+            let screen_delta_max_y: i64 = (game_cursor.logical_position.y
+                + orthographic.area.max.y as i64)
+                + CELL_DESPAWN_OVERSCAN;
+            let screen_delta_min_y: i64 = (game_cursor.logical_position.y
+                + orthographic.area.min.y as i64)
+                - CELL_DESPAWN_OVERSCAN;
 
             let range_x: RangeInclusive<i64> = screen_delta_min_x..=screen_delta_max_x;
             let range_y: RangeInclusive<i64> = screen_delta_min_y..=screen_delta_max_y;
@@ -525,6 +535,7 @@ impl TilePosition {
 }
 
 impl GameCursor {
+    #[allow(dead_code)]
     fn new(logical_position: LogicalPosition, frac_position: Vec2) -> Self {
         GameCursor {
             logical_position: logical_position,
@@ -579,4 +590,8 @@ impl GameCursor {
 
         return cursor_frac;
     }
+}
+
+fn startup_assertions() {
+    assert!(CELL_DESPAWN_OVERSCAN >= CELL_SPAWN_OVERSCAN);
 }
