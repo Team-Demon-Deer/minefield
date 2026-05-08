@@ -1,5 +1,7 @@
 use bevy::color::palettes::tailwind::BLUE_400;
+use bevy::ecs::system::IntoResult;
 use bevy::prelude::*;
+use bevy::reflect::DynamicTypePath;
 use bevy::sprite_render::TilemapChunkMeshCache;
 use bevy::{
     color::palettes::tailwind::RED_400,
@@ -9,7 +11,7 @@ use bevy::{
 };
 use rand::{RngExt, SeedableRng};
 use rand_chacha::ChaCha8Rng;
-use std::ops::Range;
+use std::ops::{Range, RangeInclusive};
 use time::UtcDateTime;
 
 /// Game Cursor movement speed factor.
@@ -18,7 +20,7 @@ const GAMECURSOR_SPEED: f32 = 1.0;
 /// How quickly should the camera snap to the desired location.
 const CAMERA_DECAY_RATE: f32 = 2.0;
 const CAMERA_ZOOM_SPEED: f32 = 0.1;
-const CAMERA_ZOOM_RANGE: Range<f32> = 0.0001..1.0;
+const CAMERA_ZOOM_RANGE: Range<f32> = 0.0001..0.010;
 const CELL_SIZE: u8 = 16;
 const CELL_SCALE: f32 = 1. / (CELL_SIZE as f32);
 const RANDOM_SEED: u64 = 34;
@@ -58,6 +60,9 @@ enum CellState {
 
 type TilesArray = [[bool; CELL_SIZE as usize]; CELL_SIZE as usize];
 
+#[derive(Resource, Deref, DerefMut)]
+struct MinefieldTilemap(Handle<Image>);
+
 fn main() {
     App::new()
         .add_plugins(DefaultPlugins.set(ImagePlugin::default_nearest()))
@@ -69,12 +74,16 @@ fn main() {
             Update,
             (
                 move_gamecursor,
-                move_tile_cursor,
-                move_cells,
                 update_camera,
                 zoom_camera,
+                move_tile_cursor,
+                move_cells,
             )
                 .chain(),
+        )
+        .add_systems(
+            FixedUpdate,
+            (spawn_visible_cells, remove_nonvisible_cells).chain(),
         )
         .add_systems(Update, (on_click).chain())
         .run();
@@ -88,17 +97,19 @@ fn setup(mut commands: Commands, assets: Res<AssetServer>) {
     // This isn't strictly required in practical use unless you need your app to be deterministic.
     let mut rng = ChaCha8Rng::seed_from_u64(RANDOM_SEED);
 
+    let minefield_tileset: MinefieldTilemap = MinefieldTilemap(assets.load_with_settings(
+        "minefield-tiles.png",
+        |settings: &mut ImageLoaderSettings| {
+            // The tileset texture is expected to be an array of tile textures, so we tell the
+            // `ImageLoader` that our texture is composed of 4 stacked tile images.
+            settings.array_layout = Some(ImageArrayLayout::RowCount { rows: 16 });
+        },
+    ));
+
     let minefield_tilemap_chunk: TilemapChunk = TilemapChunk {
         chunk_size: UVec2::splat(CELL_SIZE as u32),
         tile_display_size: UVec2::splat(1),
-        tileset: assets.load_with_settings(
-            "minefield-tiles.png",
-            |settings: &mut ImageLoaderSettings| {
-                // The tileset texture is expected to be an array of tile textures, so we tell the
-                // `ImageLoader` that our texture is composed of 4 stacked tile images.
-                settings.array_layout = Some(ImageArrayLayout::RowCount { rows: 16 });
-            },
-        ),
+        tileset: minefield_tileset.0.clone(),
         ..default()
     };
 
@@ -178,6 +189,7 @@ fn setup(mut commands: Commands, assets: Res<AssetServer>) {
     commands.spawn(Camera2d);
 
     commands.insert_resource(SeededRng(rng));
+    commands.insert_resource(minefield_tileset);
 }
 
 /// Update the camera position by tracking the player.
@@ -287,13 +299,131 @@ fn zoom_camera(
     }
 }
 
-// fn spawn_visible_cells(
-//     game_cursor: Single<&GameCursor>,
-//     q_window: Single<&Window>,
-//     q_camera: Single<&Camera>,
-//     q_cells: Query<&Cell>,
-// ) {
-// }
+fn spawn_visible_cells(
+    minefield_tileset: Res<MinefieldTilemap>,
+    mut commands: Commands,
+    game_cursor: Single<&GameCursor>,
+    q_camera: Single<&Projection, With<Camera2d>>,
+    q_cells: Query<&Cell>,
+    rng: Res<SeededRng>,
+) {
+    let tile_data: Vec<Option<TileData>> = (0..UVec2::splat(CELL_SIZE as u32).element_product())
+        .map(|i| {
+            if i == 0 {
+                None
+            } else {
+                Some(TileData::from_tileset_index(i as u16 - 1))
+            }
+        })
+        .collect();
+    let mut initial_bomb_locations: TilesArray = default();
+    for i in 1..(CELL_SIZE as usize) {
+        initial_bomb_locations[i - 1][i - 1] = true;
+    }
+
+    match *q_camera.into_inner() {
+        Projection::Orthographic(ref orthographic) => {
+            let screen_delta_max_x: i64 =
+                (game_cursor.logical_position.x + orthographic.area.max.x as i64);
+            let screen_delta_min_x: i64 =
+                (game_cursor.logical_position.x + orthographic.area.min.x as i64);
+            let screen_delta_max_y: i64 =
+                (game_cursor.logical_position.y + orthographic.area.max.y as i64);
+            let screen_delta_min_y: i64 =
+                (game_cursor.logical_position.y + orthographic.area.min.y as i64);
+
+            // println!(
+            //     "screensize: {:?}, Delta: L: ({:?}, {:?}) U: ({:?}, {:?})",
+            //     game_cursor.logical_position,
+            //     screen_delta_min_x,
+            //     screen_delta_min_y,
+            //     screen_delta_max_x,
+            //     screen_delta_max_y
+            // );
+
+            for i_x in screen_delta_min_x..=screen_delta_max_x {
+                for i_y in screen_delta_min_y..=screen_delta_max_y {
+                    if q_cells
+                        .into_iter()
+                        .filter(|x| x.logical_position.x == i_x)
+                        .filter(|y| y.logical_position.y == i_y)
+                        .count()
+                        == 0
+                    {
+                        println!("cell not found: {:?}, {:?}", i_x, i_y);
+
+                        // let game_space_transform: Vec2 = GameCursor::logical_to_world(
+                        //     &game_cursor,
+                        //     LogicalPosition { x: i_x, y: i_y },
+                        // );
+
+                        // commands.spawn((
+                        //     Transform {
+                        //         scale: { Vec3::splat(CELL_SCALE) },
+                        //         translation: Vec3 {
+                        //             x: -game_space_transform.x,
+                        //             y: -game_space_transform.y,
+                        //             z: 0.,
+                        //         },
+                        //         ..Default::default()
+                        //     },
+                        //     Cell {
+                        //         logical_position: LogicalPosition {
+                        //             x: i_x as i64,
+                        //             y: i_y as i64,
+                        //         },
+                        //         state: CellState::Fresh,
+                        //         bomb_locations: initial_bomb_locations,
+                        //     },
+                        //     TilemapChunk {
+                        //         chunk_size: UVec2::splat(CELL_SIZE as u32),
+                        //         tile_display_size: UVec2::splat(1),
+                        //         tileset: minefield_tileset.0.clone(),
+                        //         ..default()
+                        //     },
+                        //     TilemapChunkTileData(tile_data.clone()),
+                        // ));
+                    }
+                }
+            }
+        }
+        _ => (),
+    }
+
+    // if let Ok(world_position) =
+    // for cell in q_cells {}
+}
+
+fn remove_nonvisible_cells(
+    mut commands: Commands,
+    game_cursor: Single<&GameCursor>,
+    q_camera: Single<&Projection, With<Camera2d>>,
+    q_cells: Query<(Entity, &Cell)>,
+) {
+    match *q_camera.into_inner() {
+        Projection::Orthographic(ref orthographic) => {
+            let screen_delta_max_x: i64 =
+                (game_cursor.logical_position.x + orthographic.area.max.x as i64) + 1;
+            let screen_delta_min_x: i64 =
+                (game_cursor.logical_position.x + orthographic.area.min.x as i64) - 1;
+            let screen_delta_max_y: i64 =
+                (game_cursor.logical_position.y + orthographic.area.max.y as i64) + 1;
+            let screen_delta_min_y: i64 =
+                (game_cursor.logical_position.y + orthographic.area.min.y as i64) - 1;
+
+            let range_x: RangeInclusive<i64> = screen_delta_min_x..=screen_delta_max_x;
+            let range_y: RangeInclusive<i64> = screen_delta_min_y..=screen_delta_max_y;
+            for (entity, _) in q_cells
+                .into_iter()
+                .filter(|x| !range_x.contains(&x.1.logical_position.x))
+                .filter(|y| !range_y.contains(&y.1.logical_position.y))
+            {
+                commands.entity(entity).try_despawn();
+            }
+        }
+        _ => (),
+    }
+}
 
 fn move_cells(
     q_cells: Query<(&mut Transform, &Cell), With<Cell>>,
@@ -308,23 +438,17 @@ fn move_cells(
     }
 }
 
-fn on_click(
-    game_cursor: Single<&GameCursor>,
-    q_window: Single<&Window>,
-    q_camera: Single<&Camera>,
-    mouse_click_input: Res<ButtonInput<MouseButton>>,
-) {
-    if let Some(cursor_position) = q_window.cursor_position() {
-        if let Ok(world_position) =
-            q_camera.viewport_to_world_2d(&GlobalTransform::default(), cursor_position)
-        {
-            let tile_location = GameCursor::world_2d_to_logical(&game_cursor, world_position);
-            if mouse_click_input.just_pressed(MouseButton::Left) {
-                println!("Reveal: {:?}", tile_location);
-            } else if mouse_click_input.just_pressed(MouseButton::Right) {
-                println!("Flag: {:?}", tile_location);
-            }
-        }
+fn on_click(tile_cursor: Single<&TilePosition>, mouse_click_input: Res<ButtonInput<MouseButton>>) {
+    if mouse_click_input.just_pressed(MouseButton::Left) {
+        println!(
+            "Reveal: {:?}, tile: x: {:?}, y: {:?}",
+            tile_cursor.cell, tile_cursor.x, tile_cursor.y
+        );
+    } else if mouse_click_input.just_pressed(MouseButton::Right) {
+        println!(
+            "Flag: {:?}, tile: x: {:?}, y: {:?}",
+            tile_cursor.cell, tile_cursor.x, tile_cursor.y
+        );
     }
 }
 
@@ -364,13 +488,11 @@ fn move_tile_cursor(
         {
             let temp_pos: TilePosition =
                 GameCursor::world_2d_to_logical(&game_cursor, world_position);
-            // tile_pos.cell = temp_pos.cell;
-            // tile_pos.x = temp_pos.x;
-            // tile_pos.y = temp_pos.y;
+            tile_pos.cell = temp_pos.cell;
+            tile_pos.x = temp_pos.x;
+            tile_pos.y = temp_pos.y;
 
             let game_space_transform: Vec2 = TilePosition::tile_to_world(&game_cursor, temp_pos);
-            println!("cursor tile pos: {:?}", temp_pos);
-            println!("transform: {:?}", game_space_transform);
             tile_transform.translation.x = game_space_transform.x;
             tile_transform.translation.y = game_space_transform.y;
             tile_transform.translation.z = 0.5;
